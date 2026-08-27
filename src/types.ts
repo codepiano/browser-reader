@@ -5,6 +5,10 @@ export type Chapter = {
   file: string;
   order: number;
   wordCount: number;
+  /** Original source path, used only to resolve local image references. */
+  sourcePath?: string;
+  /** Directory containing sourcePath, relative to the source root. */
+  resourceBase?: string;
 };
 
 export type Work = {

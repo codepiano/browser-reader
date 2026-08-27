@@ -13,6 +13,28 @@ turndown.remove(['script', 'style', 'noscript', 'iframe', 'object', 'embed']);
 function array<T>(value: T | T[] | undefined): T[] { return value === undefined ? [] : Array.isArray(value) ? value : [value]; }
 function text(value: unknown): string { return typeof value === 'string' ? value.trim() : ''; }
 function countWords(markdown: string): number { return markdown.replace(/\s+/g, '').length; }
+const IMAGE_TYPES: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif' };
+function imageType(file: string): string | undefined { return IMAGE_TYPES[path.posix.extname(file).toLowerCase()]; }
+function localImageReference(reference: string): string | undefined {
+  const value = reference.trim().replace(/^<|>$/g, '').split(/[?#]/, 1)[0];
+  if (!value || /^(?:https?:|data:|file:|javascript:|blob:)/i.test(value)) return undefined;
+  try { const decoded = decodeURIComponent(value); return decoded.startsWith('/') || decoded.includes('\0') ? undefined : decoded; } catch { return undefined; }
+}
+function imageReferences(markdown: string): string[] {
+  const found = new Set<string>();
+  for (const match of markdown.matchAll(/!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))/g)) { const ref = localImageReference(match[1] || match[2]); if (ref && imageType(ref)) found.add(ref); }
+  for (const match of markdown.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)) { const ref = localImageReference(match[1]); if (ref && imageType(ref)) found.add(ref); }
+  return [...found];
+}
+async function copyMarkdownImages(markdown: string, contentRoot: string, sourceBase: string, destination: string): Promise<void> {
+  for (const reference of imageReferences(markdown)) {
+    let sourcePath: string;
+    try { sourcePath = safeRelative(path.posix.normalize(path.posix.join(sourceBase, reference))); } catch { continue; }
+    const source = inside(contentRoot, sourcePath);
+    const target = inside(destination, `assets/${sourcePath}`);
+    try { const stat = await fs.stat(source); if (!stat.isFile()) continue; await fs.mkdir(path.dirname(target), { recursive: true }); await fs.copyFile(source, target); } catch { /* missing local images remain unavailable */ }
+  }
+}
 
 export async function importMarkdownDirectory(root: string, sourceName: string, destination: string): Promise<Work[]> {
   const config = await readGitbookConfig(root);
@@ -42,7 +64,8 @@ export async function importMarkdownDirectory(root: string, sourceName: string, 
     const target = inside(destination, file);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, markdown, 'utf8');
-    chapters.push({ id, title: entry.title, level: entry.level, file, order: chapters.length, wordCount: countWords(markdown) });
+    await copyMarkdownImages(markdown, contentRoot, path.posix.dirname(relative), destination);
+    chapters.push({ id, title: entry.title, level: entry.level, file, order: chapters.length, wordCount: countWords(markdown), sourcePath: relative, resourceBase: path.posix.dirname(relative) });
   }
   return [{ id: workId, title: titleFromPath(displayName), chapters, source: 'markdown' }];
 }
@@ -126,6 +149,12 @@ export async function importEpub(file: string, destination: string, sourceName: 
   const toc = flattenToc(tocRoots);
   const workId = slug(sourceName.replace(/\.[^.]+$/, ''), 'epub-book');
   const chapters: Chapter[] = [];
+  const imageManifest = Object.values(manifest).filter((item) => /^image\//i.test(item['@_media-type'] ?? '') && imageType(item['@_href'] ?? ''));
+  for (const item of imageManifest) {
+    const sourcePath = path.posix.normalize(path.posix.join(base, decodeURIComponent(item['@_href'])));
+    const entry = zip.getEntry(sourcePath); if (!entry) continue;
+    const target = inside(destination, `assets/${sourcePath}`); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, entry.getData());
+  }
   for (const [index, idref] of spine.entries()) {
     const item = manifest[idref]; if (!item?.['@_href']) continue;
     const sourcePath = path.posix.normalize(path.posix.join(base, item['@_href'].split('#')[0]));
@@ -138,7 +167,7 @@ export async function importEpub(file: string, destination: string, sourceName: 
     const id = `${String(index + 1).padStart(3, '0')}-${slug(chapterTitle)}`;
     const file = `works/${workId}/chapters/${id}.md`;
     const target = inside(destination, file); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, markdown, 'utf8');
-    chapters.push({ id, title: chapterTitle, level: tocItem?.level ?? 1, file, order: chapters.length, wordCount: countWords(markdown) });
+    chapters.push({ id, title: chapterTitle, level: tocItem?.level ?? 1, file, order: chapters.length, wordCount: countWords(markdown), sourcePath, resourceBase: path.posix.dirname(sourcePath) });
   }
   if (!chapters.length) throw new Error('EPUB has no readable text chapters');
   const groups = tocRoots.filter((node) => node.children.length > 0).map((node) => {

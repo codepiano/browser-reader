@@ -40,6 +40,7 @@ async function writeJson(file: string, value: unknown): Promise<void> { await fs
 async function readSession(id: string): Promise<Session> { const root = inside(SESSION_ROOT, id); return JSON.parse(await fs.readFile(path.join(root, 'session.json'), 'utf8')) as Session; }
 function publicSession(session: Session): Omit<Session, 'root'> { const { root: _root, ...safe } = session; return safe; }
 function findWork(session: Session, workId: string | undefined): Work { const work = session.works.find((candidate) => candidate.id === workId) ?? session.works[0]; if (!work) throw new Error('No readable work'); return work; }
+const ASSET_TYPES: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif' };
 
 export function createApp() {
   const app = Fastify({ logger: false, bodyLimit: 250 * 1024 * 1024 });
@@ -79,8 +80,19 @@ export function createApp() {
       if (!Number.isInteger(index) || index < 0 || index >= work.chapters.length) return reply.code(404).send({ error: 'Chapter not found' });
       const chapter = work.chapters[index]; const markdown = await fs.readFile(inside(session.root, chapter.file), 'utf8');
       session.selectedWorkId = work.id; session.currentChapter = index; session.updatedAt = new Date().toISOString(); await writeJson(path.join(session.root, 'session.json'), session);
-      return { sessionId: session.id, workId: work.id, workTitle: work.title, chapter, markdown, total: work.chapters.length };
+      return { sessionId: session.id, workId: work.id, workTitle: work.title, chapter, markdown, total: work.chapters.length, warning: chapter.resourceBase === undefined ? '该会话创建于本地图片支持之前，请重新导入以显示图片。' : undefined };
     } catch { return reply.code(404).send({ error: 'Session or chapter not found' }); }
+  });
+  app.get('/api/sessions/:id/assets/*', async (request, reply) => {
+    try {
+      const params = request.params as { id: string; '*': string }; const session = await readSession(params.id);
+      const relative = safeRelative(params['*']); const extension = path.extname(relative).toLowerCase(); const contentType = ASSET_TYPES[extension];
+      if (!contentType) return reply.code(404).type('application/json').send({ error: 'Asset not found' });
+      const asset = inside(session.root, path.posix.join('assets', relative)); const stat = await fs.stat(asset);
+      if (!stat.isFile()) return reply.code(404).type('application/json').send({ error: 'Asset not found' });
+      reply.header('Content-Type', contentType).header('X-Content-Type-Options', 'nosniff').header('Cache-Control', 'private, max-age=3600');
+      return reply.send(await fs.readFile(asset));
+    } catch { return reply.code(404).type('application/json').send({ error: 'Asset not found' }); }
   });
   app.post('/api/sessions/:id/select', async (request, reply) => {
     try { const id = (request.params as { id: string }).id; const session = await readSession(id); const body = request.body as { workId?: string; chapter?: number }; const work = findWork(session, body.workId); session.selectedWorkId = work.id; session.currentChapter = Math.max(0, Math.min(body.chapter ?? 0, work.chapters.length - 1)); session.updatedAt = new Date().toISOString(); await writeJson(path.join(session.root, 'session.json'), session); return publicSession(session); } catch { return reply.code(404).send({ error: 'Session not found' }); }

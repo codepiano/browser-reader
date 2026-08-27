@@ -38,6 +38,25 @@ test('honours GitBook root and structure.summary configuration safely', async ()
   assert.match(await fs.readFile(path.join(output, works[0].chapters[0].file), 'utf8'), /configured root/i);
 });
 
+test('copies referenced Markdown images into controlled assets', async () => {
+  const root = await tempDir(); const output = await tempDir(); const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  await fs.writeFile(path.join(root, 'chapter.md'), '# Image\n\n![cover](cover.jpg)');
+  await fs.writeFile(path.join(root, 'cover.jpg'), bytes);
+  const works = await importMarkdownDirectory(root, 'image-book', output);
+  assert.equal(works[0].chapters[0].resourceBase, '.');
+  assert.deepEqual(await fs.readFile(path.join(output, 'assets', 'cover.jpg')), bytes);
+});
+
+test('resolves nested Markdown image references without escaping content root', async () => {
+  const root = await tempDir(); const output = await tempDir(); const bytes = Buffer.from('nested-image');
+  await fs.mkdir(path.join(root, 'chapters')); await fs.mkdir(path.join(root, 'images'));
+  await fs.writeFile(path.join(root, 'chapters', 'a.md'), '# A\n\n![nested](../images/a.jpg)');
+  await fs.writeFile(path.join(root, 'images', 'a.jpg'), bytes);
+  const works = await importMarkdownDirectory(root, 'nested-book', output);
+  assert.equal(works[0].chapters[0].resourceBase, 'chapters');
+  assert.deepEqual(await fs.readFile(path.join(output, 'assets', 'images', 'a.jpg')), bytes);
+});
+
 test('imports a minimal reflowable EPUB spine and navigation title', async () => {
   const root = await tempDir(); const file = path.join(root, 'book.epub'); const output = await tempDir();
   const zip = new AdmZip();
@@ -51,6 +70,18 @@ test('imports a minimal reflowable EPUB spine and navigation title', async () =>
   assert.equal(works[0].title, 'Test Book');
   assert.equal(works[0].chapters[0].title, 'Opening');
   assert.match(await fs.readFile(path.join(output, works[0].chapters[0].file), 'utf8'), /Readable/);
+});
+
+test('extracts manifest images from EPUB with the correct bytes', async () => {
+  const root = await tempDir(); const file = path.join(root, 'image.epub'); const output = await tempDir(); const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  const zip = new AdmZip(); zip.addFile('mimetype', Buffer.from('application/epub+zip'));
+  zip.addFile('META-INF/container.xml', Buffer.from('<container><rootfiles><rootfile full-path="OEBPS/package.opf"/></rootfiles></container>'));
+  zip.addFile('OEBPS/package.opf', Buffer.from('<package><metadata><dc:title>Image Book</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="cover" href="images/cover.jpg" media-type="image/jpeg"/></manifest><spine><itemref idref="c1"/></spine></package>'));
+  zip.addFile('OEBPS/c1.xhtml', Buffer.from('<html><body><h1>Chapter</h1><p><img src="images/cover.jpg" alt="Cover"></p></body></html>'));
+  zip.addFile('OEBPS/images/cover.jpg', bytes); zip.writeZip(file);
+  const works = await importEpub(file, output, 'image.epub');
+  assert.equal(works[0].chapters[0].resourceBase, 'OEBPS');
+  assert.deepEqual(await fs.readFile(path.join(output, 'assets', 'OEBPS', 'images', 'cover.jpg')), bytes);
 });
 
 test('splits EPUB collection into top-level navigation works', async () => {
