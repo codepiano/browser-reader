@@ -3,6 +3,7 @@ dist/
 .sessions/
 .omx/
 .control-panel/
+data/
 .DS_Store
 .playwright-cli/
 .control-panel/

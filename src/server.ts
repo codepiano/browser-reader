@@ -11,6 +11,17 @@ import { inside, safeRelative } from './safety.js';
 
 export const SESSION_ROOT = path.join(os.tmpdir(), 'temporary-book-reader-sessions');
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const DATA_ROOT = path.resolve('data');
+export const FONT_ROOT = path.join(DATA_ROOT, 'fonts');
+export const FONT_MANIFEST = path.join(DATA_ROOT, 'fonts.json');
+const FONT_TYPES: Record<string, { format: string; contentType: string }> = {
+  '.woff2': { format: 'woff2', contentType: 'font/woff2' },
+  '.woff': { format: 'woff', contentType: 'font/woff' },
+  '.ttf': { format: 'truetype', contentType: 'font/ttf' },
+  '.otf': { format: 'opentype', contentType: 'font/otf' }
+};
+const BUILTIN_FONT_IDS = new Set(['system-serif', 'system-sans', 'system-mono']);
+const MAX_FONT_BYTES = 50 * 1024 * 1024;
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function cleanupStaleSessions(root = SESSION_ROOT, now = Date.now()): Promise<string[]> {
@@ -37,15 +48,38 @@ export async function cleanupStaleSessions(root = SESSION_ROOT, now = Date.now()
 }
 
 async function writeJson(file: string, value: unknown): Promise<void> { await fs.writeFile(file, JSON.stringify(value, null, 2), 'utf8'); }
+async function writeJsonAtomic(file: string, value: unknown): Promise<void> { const temporary = `${file}.${process.pid}.tmp`; await fs.mkdir(path.dirname(file), { recursive: true }); await writeJson(temporary, value); await fs.rename(temporary, file); }
 async function readSession(id: string): Promise<Session> { const root = inside(SESSION_ROOT, id); return JSON.parse(await fs.readFile(path.join(root, 'session.json'), 'utf8')) as Session; }
 function publicSession(session: Session): Omit<Session, 'root'> { const { root: _root, ...safe } = session; return safe; }
 function findWork(session: Session, workId: string | undefined): Work { const work = session.works.find((candidate) => candidate.id === workId) ?? session.works[0]; if (!work) throw new Error('No readable work'); return work; }
 const ASSET_TYPES: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif' };
+type StoredFont = { id: string; label: string; family: string; format: string; extension: string; fileName: string; bytes: number; createdAt: string };
+type FontSettings = { activeFontId: string };
+async function readFonts(): Promise<StoredFont[]> { try { return JSON.parse(await fs.readFile(FONT_MANIFEST, 'utf8')) as StoredFont[]; } catch { return []; } }
+async function readFontSettings(fonts: StoredFont[]): Promise<FontSettings> { try { const settings = JSON.parse(await fs.readFile(path.join(DATA_ROOT, 'settings.json'), 'utf8')) as FontSettings; if (BUILTIN_FONT_IDS.has(settings.activeFontId) || fonts.some((font) => font.id === settings.activeFontId)) return settings; } catch { /* use default */ } return { activeFontId: 'system-serif' }; }
+async function writeFontSettings(settings: FontSettings): Promise<void> { await writeJsonAtomic(path.join(DATA_ROOT, 'settings.json'), settings); }
 
 export function createApp() {
   const app = Fastify({ logger: false, bodyLimit: 250 * 1024 * 1024 });
   app.register(multipart, { limits: { fileSize: 250 * 1024 * 1024, files: 5000, fields: 20 } });
   app.get('/api/health', async () => ({ ok: true, localOnly: true }));
+  app.get('/api/fonts', async () => { const fonts = await readFonts(); const settings = await readFontSettings(fonts); return { activeFontId: settings.activeFontId, fonts }; });
+  app.post('/api/fonts', async (request, reply) => {
+    try {
+      let uploadName = ''; let buffer: Buffer | undefined;
+      for await (const part of request.parts()) { if (part.type === 'file' && !buffer) { uploadName = part.filename; buffer = await part.toBuffer(); } else if (part.type === 'file') await part.toBuffer(); }
+      if (!buffer) return reply.code(400).send({ error: '请选择字体文件' });
+      const extension = path.extname(uploadName).toLowerCase(); const type = FONT_TYPES[extension];
+      if (!type) return reply.code(400).send({ error: '字体格式不支持，请选择 WOFF2、WOFF、TTF 或 OTF 文件。' });
+      if (!buffer.length || buffer.length > MAX_FONT_BYTES) return reply.code(400).send({ error: '字体文件必须大于 0 且不超过 50 MB。' });
+      await fs.mkdir(FONT_ROOT, { recursive: true }); const id = `font-${crypto.randomUUID()}`; const fileName = `${id}${extension}`; await fs.writeFile(inside(FONT_ROOT, fileName), buffer);
+      const font: StoredFont = { id, label: path.basename(uploadName, extension) || '未命名字体', family: `Reader Uploaded ${id.slice(-12)}`, format: type.format, extension, fileName, bytes: buffer.length, createdAt: new Date().toISOString() };
+      const fonts = await readFonts(); fonts.push(font); await writeJsonAtomic(FONT_MANIFEST, fonts); return reply.code(201).send(font);
+    } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : '字体导入失败' }); }
+  });
+  app.get('/api/fonts/:id/file', async (request, reply) => { try { const id = (request.params as { id: string }).id; const font = (await readFonts()).find((candidate) => candidate.id === id); if (!font) return reply.code(404).send({ error: 'Font not found' }); const type = FONT_TYPES[font.extension]; const buffer = await fs.readFile(inside(FONT_ROOT, font.fileName)); return reply.header('Content-Type', type.contentType).header('X-Content-Type-Options', 'nosniff').header('Cache-Control', 'private, max-age=31536000, immutable').send(buffer); } catch { return reply.code(404).send({ error: 'Font not found' }); } });
+  app.post('/api/fonts/active', async (request, reply) => { try { const fontId = (request.body as { fontId?: string })?.fontId; const fonts = await readFonts(); if (!fontId || (!BUILTIN_FONT_IDS.has(fontId) && !fonts.some((font) => font.id === fontId))) return reply.code(404).send({ error: 'Font not found' }); await writeFontSettings({ activeFontId: fontId }); return { activeFontId: fontId }; } catch { return reply.code(400).send({ error: '字体设置失败' }); } });
+  app.delete('/api/fonts/:id', async (request, reply) => { try { const id = (request.params as { id: string }).id; const fonts = await readFonts(); const font = fonts.find((candidate) => candidate.id === id); if (!font) return reply.code(404).send({ error: 'Font not found' }); await fs.rm(inside(FONT_ROOT, font.fileName), { force: true }); await writeJsonAtomic(FONT_MANIFEST, fonts.filter((candidate) => candidate.id !== id)); const settings = await readFontSettings(fonts); if (settings.activeFontId === id) await writeFontSettings({ activeFontId: 'system-serif' }); return { deleted: true }; } catch { return reply.code(404).send({ error: 'Font not found' }); } });
   app.post('/api/import', async (request, reply) => {
     const id = crypto.randomUUID(); const root = inside(SESSION_ROOT, id); const incoming = inside(root, 'incoming');
     await fs.mkdir(incoming, { recursive: true });

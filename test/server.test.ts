@@ -31,6 +31,33 @@ test('removes only stale direct UUID sessions and preserves active sessions', as
   await fs.access(path.join(root, 'not-a-session'));
 });
 
+test('persists uploaded fonts and restores the active selection', async () => {
+  const boundary = 'font-test-boundary';
+  const bytes = Buffer.from('font-fixture');
+  const payload = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="font"; filename="Fixture.ttf"\r\nContent-Type: font/ttf\r\n\r\n`),
+    bytes,
+    Buffer.from(`\r\n--${boundary}--\r\n`)
+  ]);
+  const app = createApp();
+  const builtin = await app.inject({ method: 'POST', url: '/api/fonts/active', payload: JSON.stringify({ fontId: 'system-sans' }), headers: { 'content-type': 'application/json' } });
+  assert.equal(builtin.statusCode, 200);
+  const upload = await app.inject({ method: 'POST', url: '/api/fonts', headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, payload });
+  assert.equal(upload.statusCode, 201);
+  const font = upload.json() as { id: string; bytes: number; fileName: string };
+  assert.equal(font.bytes, bytes.length);
+  const active = await app.inject({ method: 'POST', url: '/api/fonts/active', payload: JSON.stringify({ fontId: font.id }), headers: { 'content-type': 'application/json' } });
+  assert.equal(active.statusCode, 200);
+  const list = await app.inject({ method: 'GET', url: '/api/fonts' });
+  assert.equal(list.json().activeFontId, font.id);
+  const file = await app.inject({ method: 'GET', url: `/api/fonts/${font.id}/file` });
+  assert.equal(file.statusCode, 200);
+  assert.deepEqual(file.rawPayload, bytes);
+  const removed = await app.inject({ method: 'DELETE', url: `/api/fonts/${font.id}` });
+  assert.equal(removed.statusCode, 200);
+  await app.close();
+});
+
 test('serves only whitelisted session image assets with MIME and nosniff', async () => {
   const id = '33333333-3333-4333-8333-333333333333'; const assetRoot = path.join(SESSION_ROOT, id, 'assets'); const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
   await fs.mkdir(assetRoot, { recursive: true });
