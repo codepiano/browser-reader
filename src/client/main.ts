@@ -52,6 +52,30 @@ function readerView() {
 }
 async function loadChapter() { if (!session) return; const requestedChapter = chapterIndex; const section = document.querySelector<HTMLElement>('.reader-content'); if (section) section.innerHTML = '<p class="chapter-loading" aria-live="polite">正在载入章节…</p>'; try { const data = await api<{ markdown: string; sessionId: string; chapter: { resourceBase?: string }; warning?: string }>(`/api/sessions/${session.id}/chapter/${requestedChapter}?work=${encodeURIComponent(workId)}`); if (requestedChapter !== chapterIndex || !document.querySelector('article')) return; if (section) { section.innerHTML = renderMarkdown(data.markdown, data.chapter.resourceBase, data.sessionId); if (data.warning) section.insertAdjacentHTML('afterbegin', `<p class="compat-warning">${esc(data.warning)}</p>`); } window.scrollTo({ top: 0 }); } catch (error) { if (requestedChapter === chapterIndex) importView(error instanceof Error ? error.message : '章节加载失败'); } }
 function applyPrefs() { const root = document.documentElement; root.style.setProperty('--reader-size', `${prefs.size}px`); root.style.setProperty('--reader-leading', `${prefs.leading}`); root.style.setProperty('--reader-width', `${prefs.width}px`); }
+function isEditableTarget(target: EventTarget | null) {
+  const element = target instanceof HTMLElement ? target : null;
+  return element?.matches('input, textarea, select, [contenteditable="true"]') || element?.closest('[contenteditable="true"]');
+}
+function handleReaderKeydown(event: KeyboardEvent) {
+  if (!session || !document.querySelector('.reading') || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || isEditableTarget(event.target)) return;
+  const work = currentWork();
+  if (!work) return;
+  if (event.key === 'ArrowLeft' && chapterIndex > 0) {
+    event.preventDefault();
+    chapterIndex--;
+    tocOpen = false;
+    readerView();
+  } else if (event.key === 'ArrowRight' && chapterIndex < work.chapters.length - 1) {
+    event.preventDefault();
+    chapterIndex++;
+    tocOpen = false;
+    readerView();
+  } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+    event.preventDefault();
+    const direction = event.key === 'ArrowDown' ? 1 : -1;
+    window.scrollBy({ top: direction * Math.max(240, Math.round(window.innerHeight * 0.86)), behavior: 'smooth' });
+  }
+}
 function setupEvents() {
   app.onclick = async (event) => { const target = event.target as HTMLElement; const action = target.closest<HTMLElement>('[data-action]')?.dataset.action;
     if (action === 'epub') document.querySelector<HTMLInputElement>('#epub-input')?.click();
@@ -79,3 +103,5 @@ async function importFiles(files: FileList | null | undefined, kind: string) { i
 async function deleteSession() { if (!session) return; await api(`/api/sessions/${session.id}`, { method: 'DELETE' }); sessionStorage.removeItem('temporary-reader-session'); session = null; chapterIndex = 0; importView(); setupEvents(); }
 async function boot() { try { const id = sessionStorage.getItem('temporary-reader-session'); if (id) { session = await api<Session>(`/api/sessions/${id}`); workId = session.selectedWorkId || session.works[0]?.id || ''; chapterIndex = session.currentChapter || 0; readerView(); setupEvents(); return; } } catch { sessionStorage.removeItem('temporary-reader-session'); } importView(); setupEvents(); }
 boot();
+
+document.addEventListener('keydown', handleReaderKeydown);
