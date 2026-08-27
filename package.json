@@ -1,0 +1,31 @@
+{
+  "name": "temporary-book-reader",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build && tsx src/server.ts",
+    "build": "tsc -p tsconfig.json && node scripts/copy-public.mjs && esbuild src/client/main.ts --bundle --minify --outfile=dist/public/app.js",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/**/*.test.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^8.3.1",
+    "@fastify/static": "^7.0.4",
+    "adm-zip": "^0.5.16",
+    "fast-xml-parser": "^5.2.5",
+    "fastify": "^4.28.1",
+    "marked": "^15.0.7",
+    "dompurify": "^3.2.3",
+    "turndown": "^7.2.0"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.5",
+    "@types/node": "^22.10.2",
+    "@types/turndown": "^5.0.5",
+    "esbuild": "^0.24.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

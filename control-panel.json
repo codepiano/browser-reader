@@ -1,0 +1,33 @@
+{
+  "id": "browser-reader",
+  "name": "Browser Reader",
+  "workingDirectory": ".",
+  "initCommand": "./scripts/init.sh",
+  "installCommand": "./scripts/install.sh",
+  "startCommand": "./scripts/start.sh",
+  "stopCommand": "./scripts/stop.sh",
+  "statusCommand": "./scripts/status.sh",
+  "restartCommand": "./scripts/restart.sh",
+  "uninstallCommand": "./scripts/uninstall.sh",
+  "openEntryCommand": "./scripts/open-homepage.sh",
+  "openHomepageCommand": "./scripts/open-homepage.sh",
+  "surfaceType": "web",
+  "runtimeMode": "development",
+  "processMode": "managed",
+  "processManager": "project-script",
+  "pidFile": ".control-panel/browser-reader.pid",
+  "frontendUrl": "http://127.0.0.1:4321",
+  "specUrl": "https://github.com/codepiano/control-panel-spec/blob/main/spec/PROJECT_TOOLING_SPEC.md",
+  "scripts": {
+    "init": "./scripts/init.sh",
+    "install": "./scripts/install.sh",
+    "start": "./scripts/start.sh",
+    "stop": "./scripts/stop.sh",
+    "status": "./scripts/status.sh",
+    "restart": "./scripts/restart.sh",
+    "uninstall": "./scripts/uninstall.sh",
+    "openEntry": "./scripts/open-homepage.sh",
+    "openHomepage": "./scripts/open-homepage.sh"
+  },
+  "notes": "本地无 DRM EPUB 与 Markdown 临时阅读器"
+}
