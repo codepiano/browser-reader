@@ -5,7 +5,8 @@ import './style.css';
 
 type Chapter = { id: string; title: string; level: number; order: number; wordCount: number };
 type Work = { id: string; title: string; chapters: Chapter[]; source: string };
-type Session = { id: string; title: string; sourceName: string; works: Work[]; selectedWorkId?: string; currentChapter?: number };
+type ReadingLocation = { chapter: number; scrollRatio: number };
+type Session = { id: string; title: string; sourceName: string; works: Work[]; selectedWorkId?: string; currentChapter?: number; locations?: Record<string, ReadingLocation> };
 const app = document.querySelector<HTMLDivElement>('#app')!;
 let session: Session | null = null;
 let readerFonts: ReaderFont[] = [...BUILTIN_FONTS];
@@ -13,6 +14,7 @@ let activeFontId = 'system-serif';
 let chapterIndex = 0;
 let workId = '';
 let tocOpen = false;
+let progressSaveTimer: ReturnType<typeof setTimeout> | undefined;
 const prefs = { size: Number(localStorage.getItem('reader-size') || 19), leading: Number(localStorage.getItem('reader-leading') || 1.85), width: Number(localStorage.getItem('reader-width') || 720), theme: localStorage.getItem('reader-theme') || 'paper' };
 
 function esc(value: string) { return value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char] || char)); }
@@ -40,6 +42,11 @@ function renderMarkdown(source: string, resourceBase = '', sessionId = '') {
 }
 function currentWork() { return session?.works.find((work) => work.id === workId) || session?.works[0]; }
 async function api<T>(url: string, init?: RequestInit): Promise<T> { const response = await fetch(url, init); const data = await response.json(); if (!response.ok) throw new Error(data.error || '请求失败'); return data as T; }
+function currentScrollRatio() { const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight); return max === 0 ? 0 : Math.max(0, Math.min(1, window.scrollY / max)); }
+function rememberProgress() { if (!session || !workId) return null; const updatedAt = new Date().toISOString(); const location = { chapter: chapterIndex, scrollRatio: currentScrollRatio(), updatedAt }; session.locations = { ...(session.locations ?? {}), [workId]: location }; session.currentChapter = chapterIndex; return { workId, chapter: chapterIndex, scrollRatio: location.scrollRatio }; }
+function saveProgress(keepalive = false) { const payload = rememberProgress(); if (!session || !payload) return; const body = JSON.stringify(payload); if (keepalive && navigator.sendBeacon) { navigator.sendBeacon(`/api/sessions/${encodeURIComponent(session.id)}/progress`, new Blob([body], { type: 'application/json' })); return; } void fetch(`/api/sessions/${encodeURIComponent(session.id)}/progress`, { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true }); }
+function scheduleProgressSave() { if (progressSaveTimer) clearTimeout(progressSaveTimer); progressSaveTimer = setTimeout(() => saveProgress(), 600); }
+function restoreScroll(ratio: number) { requestAnimationFrame(() => requestAnimationFrame(() => { const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight); window.scrollTo({ top: Math.max(0, Math.min(max, max * ratio)), behavior: 'auto' }); })); }
 
 function shell(content: string) {
   app.innerHTML = `<div class="app-shell theme-${prefs.theme}"><header class="topbar"><div class="brand"><span class="brand-mark">◒</span><span>共读台</span></div>${session ? `<div class="session-name">${esc(session.title)}</div><button class="ghost" data-action="end">结束共读</button>` : ''}</header>${content}</div>`;
@@ -64,7 +71,7 @@ function readerView() {
   shell(`<div class="reader-layout">${tocOpen ? `<aside class="toc open" id="toc"><div class="toc-head"><div><span class="eyebrow">CONTENTS</span><h2>${esc(work.title)}</h2></div><button class="icon-button" data-action="toc">×</button></div><nav>${work.chapters.map((item, i) => `<button class="toc-item ${i === chapterIndex ? 'active' : ''}" data-chapter="${i}"><span>${String(i + 1).padStart(2, '0')}</span>${esc(item.title)}</button>`).join('')}</nav></aside>` : ''}<main class="reading"><div class="reading-toolbar"><button class="toolbar-button" data-action="toc">☰ <span>目录</span></button><div class="breadcrumb">${esc(work.title)} <span>/</span> ${String(chapterIndex + 1).padStart(2, '0')} / ${work.chapters.length}</div><div class="toolbar-actions"><button class="toolbar-button" data-action="settings">Aa</button></div></div><article data-session-id="${session!.id}" data-work-id="${work.id}" data-chapter-id="${chapter.id}"><header class="chapter-head"><div class="chapter-kicker">${String(chapterIndex + 1).padStart(2, '0')} · ${esc(work.title)}</div><h1>${esc(chapter.title)}</h1><div class="chapter-meta">${chapter.wordCount.toLocaleString()} 字</div></header><section class="reader-content"><p class="chapter-loading" aria-live="polite">正在载入章节…</p></section><footer class="chapter-nav"><button class="nav-button" data-action="previous" ${chapterIndex === 0 ? 'disabled' : ''}>← <span>上一章</span></button><span>${chapterIndex + 1} / ${work.chapters.length}</span><button class="nav-button" data-action="next" ${chapterIndex >= work.chapters.length - 1 ? 'disabled' : ''}><span>下一章</span> →</button></footer></article></main></div><div class="settings-popover" id="settings">${fontSettingsMarkup()}<label>字号 <input type="range" min="15" max="25" value="${prefs.size}" data-pref="size"/></label><label>行距 <input type="range" min="1.4" max="2.3" step=".05" value="${prefs.leading}" data-pref="leading"/></label><label>宽度 <input type="range" min="580" max="900" step="10" value="${prefs.width}" data-pref="width"/></label><div class="theme-row"><button data-theme="paper">纸张</button><button data-theme="night">夜读</button></div></div>`);
   loadChapter(); setupEvents();
 }
-async function loadChapter() { if (!session) return; const requestedChapter = chapterIndex; const section = document.querySelector<HTMLElement>('.reader-content'); if (section) section.innerHTML = '<p class="chapter-loading" aria-live="polite">正在载入章节…</p>'; try { const data = await api<{ markdown: string; sessionId: string; chapter: { resourceBase?: string }; warning?: string }>(`/api/sessions/${session.id}/chapter/${requestedChapter}?work=${encodeURIComponent(workId)}`); if (requestedChapter !== chapterIndex || !document.querySelector('article')) return; if (section) { section.innerHTML = renderMarkdown(data.markdown, data.chapter.resourceBase, data.sessionId); if (data.warning) section.insertAdjacentHTML('afterbegin', `<p class="compat-warning">${esc(data.warning)}</p>`); } window.scrollTo({ top: 0 }); } catch (error) { if (requestedChapter === chapterIndex) importView(error instanceof Error ? error.message : '章节加载失败'); } }
+async function loadChapter() { if (!session) return; const requestedChapter = chapterIndex; const requestedWork = workId; const section = document.querySelector<HTMLElement>('.reader-content'); if (section) section.innerHTML = '<p class="chapter-loading" aria-live="polite">正在载入章节…</p>'; try { const data = await api<{ markdown: string; sessionId: string; chapter: { resourceBase?: string }; warning?: string }>(`/api/sessions/${session.id}/chapter/${requestedChapter}?work=${encodeURIComponent(requestedWork)}`); if (requestedChapter !== chapterIndex || requestedWork !== workId || !document.querySelector('article')) return; if (section) { section.innerHTML = renderMarkdown(data.markdown, data.chapter.resourceBase, data.sessionId); if (data.warning) section.insertAdjacentHTML('afterbegin', `<p class="compat-warning">${esc(data.warning)}</p>`); } const location = session.locations?.[requestedWork]; restoreScroll(location?.chapter === requestedChapter ? location.scrollRatio : 0); } catch (error) { if (requestedChapter === chapterIndex) importView(error instanceof Error ? error.message : '章节加载失败'); } }
 function applyPrefs() { const root = document.documentElement; root.style.setProperty('--reader-size', `${prefs.size}px`); root.style.setProperty('--reader-leading', `${prefs.leading}`); root.style.setProperty('--reader-width', `${prefs.width}px`); }
 function isEditableTarget(target: EventTarget | null) {
   const element = target instanceof HTMLElement ? target : null;
@@ -76,11 +83,13 @@ function handleReaderKeydown(event: KeyboardEvent) {
   if (!work) return;
   if (event.key === 'ArrowLeft' && chapterIndex > 0) {
     event.preventDefault();
+    saveProgress();
     chapterIndex--;
     tocOpen = false;
     readerView();
   } else if (event.key === 'ArrowRight' && chapterIndex < work.chapters.length - 1) {
     event.preventDefault();
+    saveProgress();
     chapterIndex++;
     tocOpen = false;
     readerView();
@@ -96,7 +105,7 @@ function setupEvents() {
     if (action === 'folder') document.querySelector<HTMLInputElement>('#folder-input')?.click();
     if (action === 'discard') { if (session) await deleteSession(); else importView(); }
     if (action === 'start') { const selected = document.querySelector<HTMLElement>('.work-option.selected')?.dataset.work; workId = selected || session!.works[0].id; chapterIndex = 0; await api(`/api/sessions/${session!.id}/select`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workId }) }); readerView(); }
-    if (action === 'toc') { tocOpen = !tocOpen; readerView(); }
+    if (action === 'toc') { saveProgress(); tocOpen = !tocOpen; readerView(); }
     if (action === 'settings') document.querySelector('#settings')?.classList.toggle('visible');
     if (action === 'upload-font') document.querySelector<HTMLInputElement>('#font-input')?.click();
     if (action === 'delete-font') {
@@ -105,12 +114,12 @@ function setupEvents() {
         try { await deleteUploadedFont(font.id); readerFonts = readerFonts.filter((candidate) => candidate.id !== font.id); activeFontId = 'system-serif'; await setActiveFont(activeFontId); await applyReaderFont(BUILTIN_FONTS[0]); readerView(); } catch (error) { const node = document.querySelector('#font-error'); if (node) node.textContent = error instanceof Error ? error.message : '删除字体失败'; }
       }
     }
-    if (action === 'previous' && chapterIndex > 0) { chapterIndex--; readerView(); }
-    if (action === 'next' && chapterIndex < currentWork()!.chapters.length - 1) { chapterIndex++; readerView(); }
+    if (action === 'previous' && chapterIndex > 0) { saveProgress(); chapterIndex--; readerView(); }
+    if (action === 'next' && chapterIndex < currentWork()!.chapters.length - 1) { saveProgress(); chapterIndex++; readerView(); }
     if (action === 'end') { if (confirm('结束这次共读并删除临时文件？此操作不可撤销。')) await deleteSession(); }
     const work = target.closest<HTMLElement>('[data-work]')?.dataset.work; if (work) { document.querySelectorAll('.work-option').forEach((node) => node.classList.toggle('selected', node.getAttribute('data-work') === work)); }
-    const ch = target.closest<HTMLElement>('[data-chapter]')?.dataset.chapter; if (ch) { chapterIndex = Number(ch); tocOpen = false; readerView(); }
-    const theme = target.closest<HTMLElement>('[data-theme]')?.dataset.theme; if (theme) { prefs.theme = theme; localStorage.setItem('reader-theme', theme); readerView(); }
+    const ch = target.closest<HTMLElement>('[data-chapter]')?.dataset.chapter; if (ch) { saveProgress(); chapterIndex = Number(ch); tocOpen = false; readerView(); }
+    const theme = target.closest<HTMLElement>('[data-theme]')?.dataset.theme; if (theme) { saveProgress(); prefs.theme = theme; localStorage.setItem('reader-theme', theme); readerView(); }
   };
   app.oninput = (event) => { const input = event.target as HTMLInputElement; const key = input.dataset.pref as keyof typeof prefs; if (!key) return; prefs[key] = Number(input.value) as never; localStorage.setItem(`reader-${key}`, input.value); applyPrefs(); };
   app.onchange = async (event) => { const target = event.target as HTMLInputElement | HTMLSelectElement; if (target.id === 'font-select') { const font = readerFonts.find((candidate) => candidate.id === target.value); if (!font) return; try { await applyReaderFont(font); await setActiveFont(font.id); activeFontId = font.id; } catch (error) { const node = document.querySelector('#font-error'); if (node) node.textContent = error instanceof Error ? error.message : '字体加载失败'; } } };
@@ -124,7 +133,9 @@ function setupEvents() {
 }
 async function importFiles(files: FileList | null | undefined, kind: string) { if (!files?.length) return; const body = new FormData(); body.append('kind', kind); [...files].forEach((file) => body.append('files', file, (file as any).webkitRelativePath || file.name)); app.innerHTML = `<main class="loading"><div class="loader"></div><p>正在整理书籍结构…</p></main>`; try { session = await api<Session>('/api/import', { method: 'POST', body }); workId = session.works[0]?.id || ''; inspectView(); } catch (error) { importView(error instanceof Error ? error.message : '导入失败'); setupEvents(); } }
 async function deleteSession() { if (!session) return; await api(`/api/sessions/${session.id}`, { method: 'DELETE' }); sessionStorage.removeItem('temporary-reader-session'); session = null; chapterIndex = 0; importView(); setupEvents(); }
-async function boot() { try { const catalog = await loadReaderFonts(); readerFonts = [...BUILTIN_FONTS, ...catalog.fonts]; activeFontId = catalog.activeFontId; const selected = readerFonts.find((font) => font.id === activeFontId) || BUILTIN_FONTS[0]; await applyReaderFont(selected); } catch { readerFonts = [...BUILTIN_FONTS]; activeFontId = 'system-serif'; await applyReaderFont(BUILTIN_FONTS[0]); } try { const id = sessionStorage.getItem('temporary-reader-session'); if (id) { session = await api<Session>(`/api/sessions/${id}`); workId = session.selectedWorkId || session.works[0]?.id || ''; chapterIndex = session.currentChapter || 0; readerView(); setupEvents(); return; } } catch { sessionStorage.removeItem('temporary-reader-session'); } importView(); setupEvents(); }
+async function boot() { try { const catalog = await loadReaderFonts(); readerFonts = [...BUILTIN_FONTS, ...catalog.fonts]; activeFontId = catalog.activeFontId; const selected = readerFonts.find((font) => font.id === activeFontId) || BUILTIN_FONTS[0]; await applyReaderFont(selected); } catch { readerFonts = [...BUILTIN_FONTS]; activeFontId = 'system-serif'; await applyReaderFont(BUILTIN_FONTS[0]); } try { const id = sessionStorage.getItem('temporary-reader-session'); if (id) { session = await api<Session>(`/api/sessions/${id}`); workId = session.selectedWorkId || session.works[0]?.id || ''; const location = workId ? session.locations?.[workId] : undefined; chapterIndex = location?.chapter ?? session.currentChapter ?? 0; readerView(); setupEvents(); return; } } catch { sessionStorage.removeItem('temporary-reader-session'); } importView(); setupEvents(); }
 boot();
 
 document.addEventListener('keydown', handleReaderKeydown);
+window.addEventListener('scroll', scheduleProgressSave, { passive: true });
+window.addEventListener('pagehide', () => saveProgress(true));

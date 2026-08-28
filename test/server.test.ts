@@ -16,6 +16,18 @@ test('health endpoint advertises local-only service', async () => {
   await app.close();
 });
 
+test('saves chapter and scroll progress for a session', async () => {
+  const id = '44444444-4444-4444-8444-444444444444'; const root = path.join(SESSION_ROOT, id);
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(path.join(root, 'session.json'), JSON.stringify({ id, title: 'progress', sourceName: 'progress', root, works: [{ id: 'work', title: 'Work', source: 'markdown', chapters: [{ id: 'chapter', title: 'Chapter', level: 1, file: 'chapter.md', order: 0, wordCount: 10 }] }] }));
+  const app = createApp();
+  const response = await app.inject({ method: 'POST', url: `/api/sessions/${id}/progress`, payload: JSON.stringify({ workId: 'work', chapter: 0, scrollRatio: 1.5 }), headers: { 'content-type': 'application/json' } });
+  assert.equal(response.statusCode, 200); assert.equal(response.json().location.scrollRatio, 1);
+  const saved = JSON.parse(await fs.readFile(path.join(root, 'session.json'), 'utf8'));
+  assert.deepEqual(saved.locations.work, { chapter: 0, scrollRatio: 1, updatedAt: saved.locations.work.updatedAt });
+  await app.close(); await fs.rm(root, { recursive: true, force: true });
+});
+
 test('removes only stale direct UUID sessions and preserves active sessions', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'temporary-reader-cleanup-'));
   const oldId = '11111111-1111-4111-8111-111111111111';

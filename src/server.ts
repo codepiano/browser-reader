@@ -6,7 +6,7 @@ import Fastify from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { importEpub, importMarkdownDirectory } from './importers.js';
-import { Session, Work } from './types.js';
+import { ReadingLocation, Session, Work } from './types.js';
 import { inside, safeRelative } from './safety.js';
 
 export const SESSION_ROOT = path.join(os.tmpdir(), 'temporary-book-reader-sessions');
@@ -113,9 +113,18 @@ export function createApp() {
       const query = request.query as { work?: string }; const work = findWork(session, query.work); const index = Number(params.index);
       if (!Number.isInteger(index) || index < 0 || index >= work.chapters.length) return reply.code(404).send({ error: 'Chapter not found' });
       const chapter = work.chapters[index]; const markdown = await fs.readFile(inside(session.root, chapter.file), 'utf8');
-      session.selectedWorkId = work.id; session.currentChapter = index; session.updatedAt = new Date().toISOString(); await writeJson(path.join(session.root, 'session.json'), session);
+      session.selectedWorkId = work.id; session.currentChapter = index; session.locations = session.locations ?? {}; const previous = session.locations[work.id]; session.locations[work.id] = { chapter: index, scrollRatio: previous?.chapter === index ? previous.scrollRatio : 0, updatedAt: new Date().toISOString() }; session.updatedAt = new Date().toISOString(); await writeJson(path.join(session.root, 'session.json'), session);
       return { sessionId: session.id, workId: work.id, workTitle: work.title, chapter, markdown, total: work.chapters.length, warning: chapter.resourceBase === undefined ? '该会话创建于本地图片支持之前，请重新导入以显示图片。' : undefined };
     } catch { return reply.code(404).send({ error: 'Session or chapter not found' }); }
+  });
+  app.post('/api/sessions/:id/progress', async (request, reply) => {
+    try {
+      const id = (request.params as { id: string }).id; const session = await readSession(id); const body = request.body as { workId?: string; chapter?: number; scrollRatio?: number }; const work = findWork(session, body.workId);
+      const chapter = Number(body.chapter); const scrollRatio = Number(body.scrollRatio);
+      if (!Number.isInteger(chapter) || chapter < 0 || chapter >= work.chapters.length || !Number.isFinite(scrollRatio)) return reply.code(400).send({ error: 'Invalid reading progress' });
+      const location: ReadingLocation = { chapter, scrollRatio: Math.max(0, Math.min(1, scrollRatio)), updatedAt: new Date().toISOString() };
+      session.selectedWorkId = work.id; session.currentChapter = chapter; session.locations = { ...(session.locations ?? {}), [work.id]: location }; session.updatedAt = location.updatedAt; await writeJson(path.join(session.root, 'session.json'), session); return { saved: true, location };
+    } catch { return reply.code(404).send({ error: 'Session not found' }); }
   });
   app.get('/api/sessions/:id/assets/*', async (request, reply) => {
     try {

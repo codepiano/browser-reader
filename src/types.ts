@@ -20,6 +20,12 @@ export type Work = {
   source: string;
 };
 
+export type ReadingLocation = {
+  chapter: number;
+  scrollRatio: number;
+  updatedAt: string;
+};
+
 export type Session = {
   id: string;
   title: string;
@@ -30,4 +36,5 @@ export type Session = {
   works: Work[];
   selectedWorkId?: string;
   currentChapter?: number;
+  locations?: Record<string, ReadingLocation>;
 };
