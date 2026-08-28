@@ -20,6 +20,12 @@ function renderMarkdown(source: string, resourceBase = '', sessionId = '') {
   const html = marked.parse(source, { gfm: true, breaks: false }) as string;
   const safe = sanitizeRenderedHtml(html);
   const template = document.createElement('template'); template.innerHTML = safe;
+  template.content.querySelectorAll('h1').forEach((heading) => {
+    const replacement = document.createElement('h2');
+    replacement.replaceChildren(...Array.from(heading.childNodes).map((node) => node.cloneNode(true)));
+    for (const attribute of Array.from(heading.attributes)) replacement.setAttribute(attribute.name, attribute.value);
+    heading.replaceWith(replacement);
+  });
   template.content.querySelectorAll<HTMLImageElement>('img').forEach((image) => {
     const source = image.getAttribute('src') || '';
     if (!source || /^(?:https?:|data:|file:|javascript:|blob:)/i.test(source)) { image.removeAttribute('src'); return; }
