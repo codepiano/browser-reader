@@ -5,6 +5,8 @@ export type Chapter = {
   file: string;
   order: number;
   wordCount: number;
+  /** The original XHTML head title, retained as source metadata rather than body text. */
+  sourceTitle?: string;
   /** Original source path, used only to resolve local image references. */
   sourcePath?: string;
   /** Directory containing sourcePath, relative to the source root. */

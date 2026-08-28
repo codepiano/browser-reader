@@ -118,6 +118,11 @@ async function walk(root: string, relative = ''): Promise<string[]> {
 }
 
 function titleFromPath(file: string): string { return path.posix.basename(file).replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ') || 'Untitled'; }
+function sourceTitleFromXhtml(raw: string): string {
+  const match = raw.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
+  return match?.[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || '';
+}
+function bodyFromXhtml(raw: string): string { return raw.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] ?? raw; }
 
 type TocNode = { href: string; title: string; level: number; children: TocNode[] };
 
@@ -160,14 +165,15 @@ export async function importEpub(file: string, destination: string, sourceName: 
     const sourcePath = path.posix.normalize(path.posix.join(base, item['@_href'].split('#')[0]));
     const entry = zip.getEntry(sourcePath); if (!entry) continue;
     const raw = entry.getData().toString('utf8');
-    const markdown = turndown.turndown(raw).trim();
+    const sourceTitle = sourceTitleFromXhtml(raw);
+    const markdown = turndown.turndown(bodyFromXhtml(raw)).trim();
     if (!markdown) continue;
     const tocItem = toc.find((candidate) => path.posix.normalize(candidate.href.split('#')[0]) === sourcePath);
-    const chapterTitle = tocItem?.title || firstHeading(markdown) || `Chapter ${index + 1}`;
+    const chapterTitle = tocItem?.title || firstHeading(markdown) || (sourceTitle && !isPlaceholderTitle(sourceTitle) ? sourceTitle : '') || `Chapter ${index + 1}`;
     const id = `${String(index + 1).padStart(3, '0')}-${slug(chapterTitle)}`;
     const file = `works/${workId}/chapters/${id}.md`;
     const target = inside(destination, file); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, markdown, 'utf8');
-    chapters.push({ id, title: chapterTitle, level: tocItem?.level ?? 1, file, order: chapters.length, wordCount: countWords(markdown), sourcePath, resourceBase: path.posix.dirname(sourcePath) });
+    chapters.push({ id, title: chapterTitle, level: tocItem?.level ?? 1, file, order: chapters.length, wordCount: countWords(markdown), sourcePath, resourceBase: path.posix.dirname(sourcePath), sourceTitle: sourceTitle || undefined });
   }
   if (!chapters.length) throw new Error('EPUB has no readable text chapters');
   const groups = tocRoots.filter((node) => node.children.length > 0).map((node) => {
@@ -183,6 +189,7 @@ export async function importEpub(file: string, destination: string, sourceName: 
 }
 
 function firstHeading(markdown: string): string { return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? ''; }
+function isPlaceholderTitle(value: string): boolean { return /^(?:未知|无标题|untitled|unknown|n\/a)$/i.test(value.trim()); }
 function flattenToc(nodes: TocNode[]): TocNode[] { return nodes.flatMap((node) => [node, ...flattenToc(node.children)]); }
 function parseNav(zip: AdmZip, file: string): TocNode[] {
   const entry = zip.getEntry(file); if (!entry) return [];

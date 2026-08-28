@@ -64,12 +64,27 @@ test('imports a minimal reflowable EPUB spine and navigation title', async () =>
   zip.addFile('META-INF/container.xml', Buffer.from('<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/package.opf"/></rootfiles></container>'));
   zip.addFile('OEBPS/package.opf', Buffer.from('<package><metadata><dc:title>Test Book</dc:title></metadata><manifest><item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>'));
   zip.addFile('OEBPS/nav.xhtml', Buffer.from('<nav><ol><li><a href="c1.xhtml">Opening</a></li></ol></nav>'));
-  zip.addFile('OEBPS/c1.xhtml', Buffer.from('<html><body><h1>Ignored title</h1><p>Readable <em>text</em>.</p><script>alert(1)</script></body></html>'));
+  zip.addFile('OEBPS/c1.xhtml', Buffer.from('<html><head><title>Source metadata</title></head><body><h1>Ignored title</h1><p>Readable <em>text</em>.</p><script>alert(1)</script></body></html>'));
   zip.writeZip(file);
   const works = await importEpub(file, output, 'book.epub');
   assert.equal(works[0].title, 'Test Book');
   assert.equal(works[0].chapters[0].title, 'Opening');
-  assert.match(await fs.readFile(path.join(output, works[0].chapters[0].file), 'utf8'), /Readable/);
+  const markdown = await fs.readFile(path.join(output, works[0].chapters[0].file), 'utf8');
+  assert.match(markdown, /Readable/);
+  assert.doesNotMatch(markdown, /Source metadata/);
+  assert.equal(works[0].chapters[0].sourceTitle, 'Source metadata');
+});
+
+test('uses a meaningful XHTML title only as a chapter-title fallback', async () => {
+  const root = await tempDir(); const file = path.join(root, 'title.epub'); const output = await tempDir(); const zip = new AdmZip();
+  zip.addFile('mimetype', Buffer.from('application/epub+zip'));
+  zip.addFile('META-INF/container.xml', Buffer.from('<container><rootfiles><rootfile full-path="OEBPS/package.opf"/></rootfiles></container>'));
+  zip.addFile('OEBPS/package.opf', Buffer.from('<package><metadata><dc:title>Title Book</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>'));
+  zip.addFile('OEBPS/c1.xhtml', Buffer.from('<html><head><title>Meaningful chapter name</title></head><body><p>Text only.</p></body></html>')); zip.writeZip(file);
+  const works = await importEpub(file, output, 'title.epub');
+  assert.equal(works[0].chapters[0].title, 'Meaningful chapter name');
+  assert.equal(works[0].chapters[0].sourceTitle, 'Meaningful chapter name');
+  assert.match(await fs.readFile(path.join(output, works[0].chapters[0].file), 'utf8'), /^Text only\.$/);
 });
 
 test('extracts manifest images from EPUB with the correct bytes', async () => {
