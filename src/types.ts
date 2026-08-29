@@ -11,6 +11,15 @@ export type Chapter = {
   sourcePath?: string;
   /** Directory containing sourcePath, relative to the source root. */
   resourceBase?: string;
+  contentType?: 'markdown' | 'transcript';
+  transcript?: TranscriptSegment[];
+};
+
+export type TranscriptSegment = {
+  speakerId?: string;
+  speakerName?: string;
+  role?: string;
+  text: string;
 };
 
 export type Work = {

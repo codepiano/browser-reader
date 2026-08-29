@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import Fastify from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
-import { importEpub, importMarkdownDirectory, importMarkdownFile } from './importers.js';
+import { importEpub, importMarkdownDirectory, importMarkdownFile, importTranscriptFile } from './importers.js';
 import { ReadingLocation, Session, Work } from './types.js';
 import { inside, safeRelative } from './safety.js';
 
@@ -83,11 +83,12 @@ export function createApp() {
   app.post('/api/import', async (request, reply) => {
     const id = crypto.randomUUID(); const root = inside(SESSION_ROOT, id); const incoming = inside(root, 'incoming');
     await fs.mkdir(incoming, { recursive: true });
-    let kind = ''; let sourceName = 'Untitled'; let epubFile = '';
+    let kind = ''; let sourceName = 'Untitled'; let epubFile = ''; let uploadedNames: string[] = [];
     try {
       for await (const part of request.parts()) {
         if (part.type === 'field') { if (part.fieldname === 'kind') kind = String(part.value); continue; }
         const relative = safeRelative(part.filename || 'upload'); sourceName = sourceName === 'Untitled' ? path.posix.basename(relative) : sourceName;
+        uploadedNames.push(relative);
         const target = inside(incoming, relative); await fs.mkdir(path.dirname(target), { recursive: true });
         await fs.writeFile(target, await part.toBuffer());
         if (/\.epub$/i.test(relative)) epubFile = target;
@@ -95,6 +96,7 @@ export function createApp() {
       let works: Work[];
       if (kind === 'epub' || epubFile) works = await importEpub(epubFile || inside(incoming, sourceName), root, sourceName);
       else if (kind === 'markdown-file') works = await importMarkdownFile(inside(incoming, sourceName), sourceName, root);
+      else if (kind === 'transcript-file' || (uploadedNames.length === 1 && /\.txt$/i.test(uploadedNames[0]))) works = await importTranscriptFile(inside(incoming, sourceName), sourceName, root);
       else works = await importMarkdownDirectory(incoming, sourceName, root);
       const now = new Date().toISOString();
       const session: Session = { id, title: works[0]?.title || sourceName, sourceName, createdAt: now, updatedAt: now, root, works, selectedWorkId: works[0]?.id, currentChapter: 0 };
@@ -115,7 +117,7 @@ export function createApp() {
       if (!Number.isInteger(index) || index < 0 || index >= work.chapters.length) return reply.code(404).send({ error: 'Chapter not found' });
       const chapter = work.chapters[index]; const markdown = await fs.readFile(inside(session.root, chapter.file), 'utf8');
       session.selectedWorkId = work.id; session.currentChapter = index; session.locations = session.locations ?? {}; const previous = session.locations[work.id]; session.locations[work.id] = { chapter: index, scrollRatio: previous?.chapter === index ? previous.scrollRatio : 0, updatedAt: new Date().toISOString() }; session.updatedAt = new Date().toISOString(); await writeJson(path.join(session.root, 'session.json'), session);
-      return { sessionId: session.id, workId: work.id, workTitle: work.title, chapter, markdown, total: work.chapters.length, warning: chapter.resourceBase === undefined ? '该会话创建于本地图片支持之前，请重新导入以显示图片。' : undefined };
+      return { sessionId: session.id, workId: work.id, workTitle: work.title, chapter, markdown, transcript: chapter.transcript, total: work.chapters.length, warning: chapter.resourceBase === undefined ? '该会话创建于本地图片支持之前，请重新导入以显示图片。' : undefined };
     } catch { return reply.code(404).send({ error: 'Session or chapter not found' }); }
   });
   app.post('/api/sessions/:id/progress', async (request, reply) => {

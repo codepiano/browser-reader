@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
-import { importEpub, importMarkdownDirectory, importMarkdownFile } from '../src/importers.js';
+import { importEpub, importMarkdownDirectory, importMarkdownFile, importTranscriptFile, parseTranscript } from '../src/importers.js';
 import { inside, safeRelative } from '../src/safety.js';
 
 async function tempDir() { return fs.mkdtemp(path.join(os.tmpdir(), 'temporary-reader-test-')); }
@@ -40,6 +40,25 @@ test('splits a complete Markdown book by chapter headings while keeping inner he
   assert.match(first, /^# 第一章 起源/);
   assert.match(first, /## 史前时代/);
   assert.doesNotMatch(first, /第二章/);
+});
+
+test('parses transcript speaker turns and preserves adjacent turns by speaker', async () => {
+  const parsed = parseTranscript('主持人（甲）：你好\n继续说。\n嘉宾（乙）：你好，我是乙。\n主持人（甲）：谢谢。');
+  assert.deepEqual(parsed.map((segment) => [segment.speakerName, segment.role, segment.text]), [
+    ['主持人', '甲', '你好\n继续说。'],
+    ['嘉宾', '乙', '你好，我是乙。'],
+    ['主持人', '甲', '谢谢。']
+  ]);
+});
+
+test('imports a plain transcript as a speaker-aware chapter', async () => {
+  const root = await tempDir(); const output = await tempDir(); const file = path.join(root, '访谈.txt');
+  await fs.writeFile(file, '主持人（主持人）：欢迎。\n嘉宾（嘉宾）：你好。');
+  const works = await importTranscriptFile(file, '访谈.txt', output);
+  assert.equal(works[0].source, 'transcript');
+  assert.equal(works[0].chapters[0].contentType, 'transcript');
+  assert.deepEqual(works[0].chapters[0].transcript?.map((segment) => segment.speakerName), ['主持人', '嘉宾']);
+  assert.match(await fs.readFile(path.join(output, works[0].chapters[0].file), 'utf8'), /欢迎/);
 });
 
 test('honours GitBook root and structure.summary configuration safely', async () => {

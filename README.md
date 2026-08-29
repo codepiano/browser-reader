@@ -2,7 +2,7 @@
 
 一个为浏览器 AI 共读设计的本地、一次性图书浏览工具。
 
-它把无 DRM EPUB 或 GitBook-like Markdown 项目整理成干净的章节页面，让你可以直接使用 ChatGPT Chrome 插件与当前正文共同阅读。它不试图成为永久书架，也不内置另一套 AI、批注或知识管理系统。
+它把无 DRM EPUB、GitBook-like Markdown 项目或音频转写文本整理成干净的章节页面，让你可以直接使用 ChatGPT Chrome 插件与当前正文共同阅读。它不试图成为永久书架，也不内置另一套 AI、批注或知识管理系统。
 
 > Import a book, expose one clean chapter to the browser, read it with your existing AI extension, then delete the session.
 
@@ -20,7 +20,8 @@
 ## 功能
 
 - 导入无 DRM、可重排的 EPUB 2/3。
-- 导入 GitBook、mdBook、完整 Markdown 文件或普通 Markdown 文件夹。
+- 导入 GitBook、mdBook、完整 Markdown 文件、普通 Markdown 文件夹或带有 `姓名（角色）：内容` 标记的音频转写 `.txt` 文件。
+- 转写文本按说话人分段显示，使用姓名、角色和稳定色标区分不同声音；未标注的开场或补充内容仍会保留。
 - 解析 `.gitbook.yaml` 中的 `root`、`structure.readme` 和 `structure.summary`。
 - 按 `SUMMARY.md`、`README.md` 或安全的文件夹顺序恢复章节。
 - 根据 EPUB Navigation/NCX 的顶层分组识别合集，并选择本次阅读范围。
@@ -44,7 +45,7 @@ npm install
 npm run dev
 ```
 
-打开 [http://127.0.0.1:4321](http://127.0.0.1:4321)，拖入 EPUB/完整 Markdown 文件，或选择一个 Markdown 目录。
+打开 [http://127.0.0.1:4321](http://127.0.0.1:4321)，拖入 EPUB、Markdown 或 `.txt` 转写文件，也可以选择一个 Markdown 目录。
 
 生产构建：
 
@@ -93,6 +94,22 @@ structure:
 
 完整 Markdown 文件会沿用 `source_format` 的章节识别方式：识别包含“第 X 章”的 Markdown 标题作为章节边界，目录和章节内部的小标题不会被误切分；如果没有识别到章节标题，则按单章导入。
 
+## 音频转写文本
+
+音频转写文件通常以 `.txt` 保存。选择“转写文本”或直接将单个 `.txt` 文件拖入阅读器，即可作为一章导入。
+
+推荐使用以下格式标注说话人：
+
+```text
+主持人（主持人）：大家好，欢迎收听本期节目。
+嘉宾（嘉宾）：大家好，很高兴来到这里。
+主持人（主持人）：今天我们聊聊亲密关系。
+```
+
+阅读器会根据 `姓名（角色）：内容` 识别说话轮次，并为不同说话人显示不同的颜色标记、姓名和角色。同一说话人的连续行会合并为一个段落。没有说话人标记的开场白或补充文本也会保留，并显示为“未标注说话人”。
+
+当前转写识别依赖全角括号 `（ ）` 和冒号 `：`；如果原始转写使用其他格式，文本仍可导入，但需要先转换为上述标记格式才能获得说话人区分。
+
 ## 隐私与安全边界
 
 - 图书不会上传到远程服务。
@@ -110,6 +127,7 @@ structure:
 - EPUB 字体和复杂资源尚未映射；图片仅支持列出的静态图片格式。
 - 不支持固定版式、漫画、媒体型或依赖脚本的 EPUB。
 - 合集识别依赖书籍自身的 Navigation/NCX 结构，结构不规范时会按整本书打开。
+- 转写 `.txt` 当前按单章导入；说话人识别依赖 `姓名（角色）：内容` 标记，不会从没有标记的纯文本中推断身份。
 - 当前验证覆盖普通浏览器 DOM；不同版本的 ChatGPT Chrome 插件仍可能采用不同的页面读取策略。
 - 不提供书架、批注、划线、阅读统计、账户、云同步或内置聊天。
 
@@ -118,7 +136,7 @@ structure:
 ```text
 src/
 ├── client/          # 极简共读页面和 DOM 清理
-├── importers.ts     # EPUB / Markdown 导入与合集识别
+├── importers.ts     # EPUB / Markdown / 转写文本导入与合集识别
 ├── safety.ts        # 本地路径安全
 ├── server.ts        # Fastify API 和临时会话生命周期
 └── types.ts
@@ -136,7 +154,7 @@ npm run build
 git diff --check
 ```
 
-测试覆盖路径逃逸防护、GitBook 目录解析、EPUB spine/navigation、合集拆分、API 行为和过期会话清理。
+测试覆盖路径逃逸防护、GitBook 目录解析、EPUB spine/navigation、合集拆分、转写说话人解析、API 行为和过期会话清理。
 
 ## 项目状态
 

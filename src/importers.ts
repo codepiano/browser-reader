@@ -3,7 +3,7 @@ import path from 'node:path';
 import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
 import TurndownService from 'turndown';
-import { Chapter, Work } from './types.js';
+import { Chapter, TranscriptSegment, Work } from './types.js';
 import { inside, safeRelative, slug } from './safety.js';
 
 const xml = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', removeNSPrefix: true });
@@ -13,6 +13,27 @@ turndown.remove(['script', 'style', 'noscript', 'iframe', 'object', 'embed']);
 function array<T>(value: T | T[] | undefined): T[] { return value === undefined ? [] : Array.isArray(value) ? value : [value]; }
 function text(value: unknown): string { return typeof value === 'string' ? value.trim() : ''; }
 function countWords(markdown: string): number { return markdown.replace(/\s+/g, '').length; }
+
+const SPEAKER_LINE_RE = /^\s*(.{1,80}?)（([^）]{1,40})）：\s*(.*)$/;
+
+export function parseTranscript(text: string): TranscriptSegment[] {
+  const segments: TranscriptSegment[] = [];
+  let current: TranscriptSegment | undefined;
+  for (const rawLine of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const match = line.match(SPEAKER_LINE_RE);
+    if (match) {
+      const speakerName = match[1].trim();
+      const role = match[2].trim();
+      const speakerId = `${speakerName}::${role}`;
+      if (current && current.speakerId === speakerId) current.text += `\n${match[3].trim()}`;
+      else { current = { speakerId, speakerName, role, text: match[3].trim() }; segments.push(current); }
+    } else if (current) current.text += `\n${line}`;
+    else { current = { text: line }; segments.push(current); }
+  }
+  return segments.filter((segment) => segment.text.trim());
+}
 const IMAGE_TYPES: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif' };
 function imageType(file: string): string | undefined { return IMAGE_TYPES[path.posix.extname(file).toLowerCase()]; }
 function localImageReference(reference: string): string | undefined {
@@ -128,6 +149,21 @@ export async function importMarkdownFile(file: string, sourceName: string, desti
   }
   if (!chapters.length) throw new Error('Markdown file contains no readable chapters');
   return [{ id: workId, title: displayName, chapters, source: 'markdown' }];
+}
+
+export async function importTranscriptFile(file: string, sourceName: string, destination: string): Promise<Work[]> {
+  const original = await fs.readFile(file, 'utf8');
+  const transcript = parseTranscript(original);
+  if (!transcript.length) throw new Error('转写文件中没有可读内容');
+  const displayName = titleFromPath(sourceName);
+  const workId = slug(displayName, 'transcript');
+  const id = `001-${slug(displayName)}`;
+  const chapterFile = `works/${workId}/chapters/${id}.txt`;
+  const target = inside(destination, chapterFile);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, original, 'utf8');
+  const chapter: Chapter = { id, title: displayName, level: 1, file: chapterFile, order: 0, wordCount: countWords(original), sourcePath: path.basename(file), resourceBase: '.', contentType: 'transcript', transcript };
+  return [{ id: workId, title: displayName, chapters: [chapter], source: 'transcript' }];
 }
 
 type GitbookConfig = { root?: string; summary?: string; readme?: string };
