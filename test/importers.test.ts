@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
-import { importEpub, importMarkdownDirectory } from '../src/importers.js';
+import { importEpub, importMarkdownDirectory, importMarkdownFile } from '../src/importers.js';
 import { inside, safeRelative } from '../src/safety.js';
 
 async function tempDir() { return fs.mkdtemp(path.join(os.tmpdir(), 'temporary-reader-test-')); }
@@ -24,6 +24,22 @@ test('imports SUMMARY.md in declared order and keeps independent markdown files'
   assert.equal(works[0].chapters[0].title, 'Second');
   assert.equal(works[0].chapters[1].title, 'First');
   assert.match(await fs.readFile(path.join(output, works[0].chapters[0].file), 'utf8'), /World/);
+});
+
+test('splits a complete Markdown book by chapter headings while keeping inner headings', async () => {
+  const root = await tempDir(); const output = await tempDir();
+  const file = path.join(root, '俳句史.md');
+  await fs.writeFile(file, [
+    '## 目录', '', '第一章 …… (1)', '第二章 …… (14)', '',
+    '## 第一章 起源', '', '正文一。', '', '## 史前时代', '', '正文小节。', '',
+    '## 第二章 黄金时代', '', '正文二。',
+  ].join('\n'));
+  const works = await importMarkdownFile(file, '俳句史.md', output);
+  assert.deepEqual(works[0].chapters.map((chapter) => chapter.title), ['第一章 起源', '第二章 黄金时代']);
+  const first = await fs.readFile(path.join(output, works[0].chapters[0].file), 'utf8');
+  assert.match(first, /^# 第一章 起源/);
+  assert.match(first, /## 史前时代/);
+  assert.doesNotMatch(first, /第二章/);
 });
 
 test('honours GitBook root and structure.summary configuration safely', async () => {

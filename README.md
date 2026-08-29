@@ -20,7 +20,7 @@
 ## 功能
 
 - 导入无 DRM、可重排的 EPUB 2/3。
-- 导入 GitBook、mdBook 或普通 Markdown 文件夹。
+- 导入 GitBook、mdBook、完整 Markdown 文件或普通 Markdown 文件夹。
 - 解析 `.gitbook.yaml` 中的 `root`、`structure.readme` 和 `structure.summary`。
 - 按 `SUMMARY.md`、`README.md` 或安全的文件夹顺序恢复章节。
 - 根据 EPUB Navigation/NCX 的顶层分组识别合集，并选择本次阅读范围。
@@ -44,7 +44,7 @@ npm install
 npm run dev
 ```
 
-打开 [http://127.0.0.1:4321](http://127.0.0.1:4321)，拖入 EPUB 文件或选择一个 Markdown 目录。
+打开 [http://127.0.0.1:4321](http://127.0.0.1:4321)，拖入 EPUB/完整 Markdown 文件，或选择一个 Markdown 目录。
 
 生产构建：
 
@@ -90,6 +90,8 @@ structure:
 ```
 
 如果没有配置文件或目录文件，共读台会扫描 Markdown 文件并使用稳定的路径顺序作为回退。
+
+完整 Markdown 文件会沿用 `source_format` 的章节识别方式：识别包含“第 X 章”的 Markdown 标题作为章节边界，目录和章节内部的小标题不会被误切分；如果没有识别到章节标题，则按单章导入。
 
 ## 隐私与安全边界
 

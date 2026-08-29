@@ -70,6 +70,66 @@ export async function importMarkdownDirectory(root: string, sourceName: string, 
   return [{ id: workId, title: titleFromPath(displayName), chapters, source: 'markdown' }];
 }
 
+type SplitMarkdownChapter = { number: string; title: string; markdown: string };
+
+const MARKDOWN_HEADING_RE = /^\s*#{1,6}\s+.*$/;
+const CHAPTER_TITLE_RE = /^第([一二三四五六七八九十百千万零〇两0-9]+)章(?:[\s：:.-—–]*(.*))?$/;
+
+function normalizeMarkdownHeading(line: string): string {
+  return line.trim()
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/<a\b[^>]*><\/a>/gi, '')
+    .replace(/<\/?[^>]+>/g, '')
+    .replace(/[*_]{1,3}/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function splitMarkdownChapters(markdown: string): SplitMarkdownChapter[] {
+  const lines = markdown.split(/(?<=\n)/);
+  const chapters: SplitMarkdownChapter[] = [];
+  let current: SplitMarkdownChapter | undefined;
+
+  for (const line of lines) {
+    if (MARKDOWN_HEADING_RE.test(line.trimEnd())) {
+      const heading = normalizeMarkdownHeading(line);
+      const match = heading.match(CHAPTER_TITLE_RE);
+      if (match) {
+        if (current) chapters.push({ ...current, markdown: current.markdown.trim() });
+        const number = match[1];
+        const title = `第${number}章${match[2] ? ` ${match[2].trim()}` : ''}`;
+        current = { number, title, markdown: `# ${title}\n` };
+        continue;
+      }
+    }
+    if (current) current.markdown += line;
+  }
+  if (current) chapters.push({ ...current, markdown: current.markdown.trim() });
+  return chapters.filter((chapter) => chapter.markdown.replace(/^# [^\n]+\n?/, '').trim());
+}
+
+export async function importMarkdownFile(file: string, sourceName: string, destination: string): Promise<Work[]> {
+  const original = await fs.readFile(file, 'utf8');
+  const split = splitMarkdownChapters(original);
+  const displayName = titleFromPath(sourceName);
+  const workId = slug(displayName, 'markdown-book');
+  const chapters: Chapter[] = [];
+  const entries = split.length ? split : [{ number: '1', title: titleFromPath(sourceName), markdown: original.trim() }];
+
+  for (const [index, entry] of entries.entries()) {
+    if (!entry.markdown) continue;
+    const id = `${String(index + 1).padStart(3, '0')}-${slug(entry.title)}`;
+    const chapterFile = `works/${workId}/chapters/${id}.md`;
+    const target = inside(destination, chapterFile);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, entry.markdown, 'utf8');
+    await copyMarkdownImages(entry.markdown, path.dirname(file), '.', destination);
+    chapters.push({ id, title: entry.title, level: 1, file: chapterFile, order: chapters.length, wordCount: countWords(entry.markdown), sourcePath: path.basename(file), resourceBase: '.' });
+  }
+  if (!chapters.length) throw new Error('Markdown file contains no readable chapters');
+  return [{ id: workId, title: displayName, chapters, source: 'markdown' }];
+}
+
 type GitbookConfig = { root?: string; summary?: string; readme?: string };
 async function readGitbookConfig(root: string): Promise<GitbookConfig> {
   let content: string;

@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import Fastify from 'fastify';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
-import { importEpub, importMarkdownDirectory } from './importers.js';
+import { importEpub, importMarkdownDirectory, importMarkdownFile } from './importers.js';
 import { ReadingLocation, Session, Work } from './types.js';
 import { inside, safeRelative } from './safety.js';
 
@@ -94,6 +94,7 @@ export function createApp() {
       }
       let works: Work[];
       if (kind === 'epub' || epubFile) works = await importEpub(epubFile || inside(incoming, sourceName), root, sourceName);
+      else if (kind === 'markdown-file') works = await importMarkdownFile(inside(incoming, sourceName), sourceName, root);
       else works = await importMarkdownDirectory(incoming, sourceName, root);
       const now = new Date().toISOString();
       const session: Session = { id, title: works[0]?.title || sourceName, sourceName, createdAt: now, updatedAt: now, root, works, selectedWorkId: works[0]?.id, currentChapter: 0 };
