@@ -48,7 +48,7 @@ export async function cleanupStaleSessions(root = SESSION_ROOT, now = Date.now()
 }
 
 async function writeJson(file: string, value: unknown): Promise<void> { await fs.writeFile(file, JSON.stringify(value, null, 2), 'utf8'); }
-async function writeJsonAtomic(file: string, value: unknown): Promise<void> { const temporary = `${file}.${process.pid}.tmp`; await fs.mkdir(path.dirname(file), { recursive: true }); await writeJson(temporary, value); await fs.rename(temporary, file); }
+async function writeJsonAtomic(file: string, value: unknown): Promise<void> { const temporary = `${file}.${crypto.randomUUID()}.tmp`; await fs.mkdir(path.dirname(file), { recursive: true }); try { await writeJson(temporary, value); await fs.rename(temporary, file); } finally { await fs.rm(temporary, { force: true }); } }
 async function readSession(id: string): Promise<Session> { const root = inside(SESSION_ROOT, id); return JSON.parse(await fs.readFile(path.join(root, 'session.json'), 'utf8')) as Session; }
 function publicSession(session: Session): Omit<Session, 'root'> { const { root: _root, ...safe } = session; return safe; }
 function findWork(session: Session, workId: string | undefined): Work { const work = session.works.find((candidate) => candidate.id === workId) ?? session.works[0]; if (!work) throw new Error('No readable work'); return work; }
@@ -100,7 +100,7 @@ export function createApp() {
       else works = await importMarkdownDirectory(incoming, sourceName, root);
       const now = new Date().toISOString();
       const session: Session = { id, title: works[0]?.title || sourceName, sourceName, createdAt: now, updatedAt: now, root, works, selectedWorkId: works[0]?.id, currentChapter: 0 };
-      await writeJson(path.join(root, 'session.json'), session);
+      await writeJsonAtomic(path.join(root, 'session.json'), session);
       return reply.code(201).send(publicSession(session));
     } catch (error) {
       await fs.rm(root, { recursive: true, force: true });
@@ -116,7 +116,7 @@ export function createApp() {
       const query = request.query as { work?: string }; const work = findWork(session, query.work); const index = Number(params.index);
       if (!Number.isInteger(index) || index < 0 || index >= work.chapters.length) return reply.code(404).send({ error: 'Chapter not found' });
       const chapter = work.chapters[index]; const markdown = await fs.readFile(inside(session.root, chapter.file), 'utf8');
-      session.selectedWorkId = work.id; session.currentChapter = index; session.locations = session.locations ?? {}; const previous = session.locations[work.id]; session.locations[work.id] = { chapter: index, scrollRatio: previous?.chapter === index ? previous.scrollRatio : 0, updatedAt: new Date().toISOString() }; session.updatedAt = new Date().toISOString(); await writeJson(path.join(session.root, 'session.json'), session);
+      session.selectedWorkId = work.id; session.currentChapter = index; session.locations = session.locations ?? {}; const previous = session.locations[work.id]; session.locations[work.id] = { chapter: index, scrollRatio: previous?.chapter === index ? previous.scrollRatio : 0, updatedAt: new Date().toISOString() }; session.updatedAt = new Date().toISOString(); await writeJsonAtomic(path.join(session.root, 'session.json'), session);
       return { sessionId: session.id, workId: work.id, workTitle: work.title, chapter, markdown, transcript: chapter.transcript, total: work.chapters.length, warning: chapter.resourceBase === undefined ? '该会话创建于本地图片支持之前，请重新导入以显示图片。' : undefined };
     } catch { return reply.code(404).send({ error: 'Session or chapter not found' }); }
   });
@@ -126,7 +126,7 @@ export function createApp() {
       const chapter = Number(body.chapter); const scrollRatio = Number(body.scrollRatio);
       if (!Number.isInteger(chapter) || chapter < 0 || chapter >= work.chapters.length || !Number.isFinite(scrollRatio)) return reply.code(400).send({ error: 'Invalid reading progress' });
       const location: ReadingLocation = { chapter, scrollRatio: Math.max(0, Math.min(1, scrollRatio)), updatedAt: new Date().toISOString() };
-      session.selectedWorkId = work.id; session.currentChapter = chapter; session.locations = { ...(session.locations ?? {}), [work.id]: location }; session.updatedAt = location.updatedAt; await writeJson(path.join(session.root, 'session.json'), session); return { saved: true, location };
+      session.selectedWorkId = work.id; session.currentChapter = chapter; session.locations = { ...(session.locations ?? {}), [work.id]: location }; session.updatedAt = location.updatedAt; await writeJsonAtomic(path.join(session.root, 'session.json'), session); return { saved: true, location };
     } catch { return reply.code(404).send({ error: 'Session not found' }); }
   });
   app.get('/api/sessions/:id/assets/*', async (request, reply) => {
@@ -141,7 +141,7 @@ export function createApp() {
     } catch { return reply.code(404).type('application/json').send({ error: 'Asset not found' }); }
   });
   app.post('/api/sessions/:id/select', async (request, reply) => {
-    try { const id = (request.params as { id: string }).id; const session = await readSession(id); const body = request.body as { workId?: string; chapter?: number }; const work = findWork(session, body.workId); session.selectedWorkId = work.id; session.currentChapter = Math.max(0, Math.min(body.chapter ?? 0, work.chapters.length - 1)); session.updatedAt = new Date().toISOString(); await writeJson(path.join(session.root, 'session.json'), session); return publicSession(session); } catch { return reply.code(404).send({ error: 'Session not found' }); }
+    try { const id = (request.params as { id: string }).id; const session = await readSession(id); const body = request.body as { workId?: string; chapter?: number }; const work = findWork(session, body.workId); session.selectedWorkId = work.id; session.currentChapter = Math.max(0, Math.min(body.chapter ?? 0, work.chapters.length - 1)); session.updatedAt = new Date().toISOString(); await writeJsonAtomic(path.join(session.root, 'session.json'), session); return publicSession(session); } catch { return reply.code(404).send({ error: 'Session not found' }); }
   });
   app.delete('/api/sessions/:id', async (request, reply) => { try { const id = (request.params as { id: string }).id; await fs.rm(inside(SESSION_ROOT, id), { recursive: true, force: true }); return { deleted: true }; } catch { return reply.code(404).send({ error: 'Session not found' }); } });
   const publicRoot = path.resolve('dist/public');

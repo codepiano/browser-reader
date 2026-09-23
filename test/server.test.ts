@@ -3,7 +3,36 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { cleanupStaleSessions, createApp, SESSION_ROOT, SESSION_TTL_MS } from '../src/server.js';
+
+test('chapter and session reads remain valid while progress is saved concurrently', async () => {
+  const id = crypto.randomUUID();
+  const root = path.join(SESSION_ROOT, id);
+  const app = createApp();
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(path.join(root, 'chapter.md'), '# Chapter\nContent');
+  await fs.writeFile(path.join(root, 'session.json'), JSON.stringify({
+    id, title: 'Concurrent reading', root,
+    works: [{ id: 'work', title: 'Work', chapters: Array.from({ length: 200 }, (_, index) => ({
+      id: `chapter-${index}`, title: `Chapter ${index}`, file: 'chapter.md', order: index, level: 1, wordCount: 10
+    })) }]
+  }));
+  try {
+    for (let round = 0; round < 4; round++) {
+      const responses = await Promise.all(Array.from({ length: 40 }, (_, index) => {
+        if (index % 4 === 0) return app.inject({ method: 'POST', url: `/api/sessions/${id}/progress`, payload: { workId: 'work', chapter: round, scrollRatio: 0.5 } });
+        if (index % 4 === 1) return app.inject({ method: 'POST', url: `/api/sessions/${id}/select`, payload: { workId: 'work', chapter: round } });
+        return app.inject({ method: 'GET', url: `/api/sessions/${id}${index % 4 === 2 ? `/chapter/${round}?work=work` : ''}` });
+      }));
+      for (const response of responses) assert.equal(response.statusCode, 200, response.body);
+      assert.equal(JSON.parse(await fs.readFile(path.join(root, 'session.json'), 'utf8')).id, id);
+    }
+  } finally {
+    await app.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test('health endpoint advertises local-only service', async () => {
   const app = createApp();

@@ -47,7 +47,7 @@ function currentScrollRatio() { const max = Math.max(0, document.documentElement
 function rememberProgress() { if (!session || !workId) return null; const updatedAt = new Date().toISOString(); const location = { chapter: chapterIndex, scrollRatio: currentScrollRatio(), updatedAt }; session.locations = { ...(session.locations ?? {}), [workId]: location }; session.currentChapter = chapterIndex; return { workId, chapter: chapterIndex, scrollRatio: location.scrollRatio }; }
 function saveProgress(keepalive = false) { const payload = rememberProgress(); if (!session || !payload) return; const body = JSON.stringify(payload); if (keepalive && navigator.sendBeacon) { navigator.sendBeacon(`/api/sessions/${encodeURIComponent(session.id)}/progress`, new Blob([body], { type: 'application/json' })); return; } void fetch(`/api/sessions/${encodeURIComponent(session.id)}/progress`, { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true }); }
 function scheduleProgressSave() { if (progressSaveTimer) clearTimeout(progressSaveTimer); progressSaveTimer = setTimeout(() => saveProgress(), 600); }
-function restoreScroll(ratio: number) { requestAnimationFrame(() => requestAnimationFrame(() => { const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight); window.scrollTo({ top: Math.max(0, Math.min(max, max * ratio)), behavior: 'auto' }); })); }
+function restoreScroll(ratio: number, isCurrent: () => boolean) { requestAnimationFrame(() => requestAnimationFrame(() => { if (!isCurrent()) return; const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight); window.scrollTo({ top: Math.max(0, Math.min(max, max * ratio)), behavior: 'auto' }); })); }
 
 function shell(content: string) {
   app.innerHTML = `<div class="app-shell theme-${prefs.theme}"><header class="topbar"><div class="brand"><span class="brand-mark">◒</span><span>共读台</span></div>${session ? `<div class="session-name">${esc(session.title)}</div><button class="ghost" data-action="end">结束共读</button>` : ''}</header>${content}</div>`;
@@ -73,7 +73,31 @@ function readerView() {
   loadChapter(); setupEvents();
 }
 function renderTranscript(segments: TranscriptSegment[]) { return `<div class="transcript" aria-label="对谈转写">${segments.map((segment, index) => `<section class="transcript-turn ${segment.speakerId ? 'identified' : 'unidentified'}" style="--speaker-index:${index % 6}"><header>${segment.speakerName ? `<strong>${esc(segment.speakerName)}</strong><span>${esc(segment.role || '说话人')}</span>` : '<strong>未标注说话人</strong><span>转写文本</span>'}</header><div>${segment.text.split(/\n+/).map((line) => `<p>${esc(line)}</p>`).join('')}</div></section>`).join('')}</div>`; }
-async function loadChapter() { if (!session) return; const requestedChapter = chapterIndex; const requestedWork = workId; const section = document.querySelector<HTMLElement>('.reader-content'); if (section) section.innerHTML = '<p class="chapter-loading" aria-live="polite">正在载入章节…</p>'; try { const data = await api<{ markdown: string; sessionId: string; chapter: { resourceBase?: string; contentType?: string; transcript?: TranscriptSegment[] }; transcript?: TranscriptSegment[]; warning?: string }>(`/api/sessions/${session.id}/chapter/${requestedChapter}?work=${encodeURIComponent(requestedWork)}`); if (requestedChapter !== chapterIndex || requestedWork !== workId || !document.querySelector('article')) return; if (section) { section.innerHTML = data.chapter.contentType === 'transcript' && data.transcript ? renderTranscript(data.transcript) : renderMarkdown(data.markdown, data.chapter.resourceBase, data.sessionId); if (data.warning) section.insertAdjacentHTML('afterbegin', `<p class="compat-warning">${esc(data.warning)}</p>`); } const location = session.locations?.[requestedWork]; restoreScroll(location?.chapter === requestedChapter ? location.scrollRatio : 0); } catch (error) { if (requestedChapter === chapterIndex) importView(error instanceof Error ? error.message : '章节加载失败'); } }
+let chapterLoadId = 0;
+async function loadChapter() {
+  if (!session) return;
+  const requestedSession = session;
+  const requestedChapter = chapterIndex;
+  const requestedWork = workId;
+  const section = document.querySelector<HTMLElement>('.reader-content');
+  if (!section) return;
+  const loadId = ++chapterLoadId;
+  const isCurrent = () => loadId === chapterLoadId && session === requestedSession
+    && requestedChapter === chapterIndex && requestedWork === workId && section.isConnected;
+  section.innerHTML = '<p class="chapter-loading" aria-live="polite">正在载入章节…</p>';
+  try {
+    const data = await api<{ markdown: string; sessionId: string; chapter: { resourceBase?: string; contentType?: string; transcript?: TranscriptSegment[] }; transcript?: TranscriptSegment[]; warning?: string }>(`/api/sessions/${requestedSession.id}/chapter/${requestedChapter}?work=${encodeURIComponent(requestedWork)}`);
+    if (!isCurrent()) return;
+    section.innerHTML = data.chapter.contentType === 'transcript' && data.transcript
+      ? renderTranscript(data.transcript) : renderMarkdown(data.markdown, data.chapter.resourceBase, data.sessionId);
+    if (data.warning) section.insertAdjacentHTML('afterbegin', `<p class="compat-warning">${esc(data.warning)}</p>`);
+    const location = requestedSession.locations?.[requestedWork];
+    restoreScroll(location?.chapter === requestedChapter ? location.scrollRatio : 0, isCurrent);
+  } catch (error) {
+    if (!isCurrent()) return;
+    section.innerHTML = `<div class="error" role="alert"><p>章节加载失败：${esc(error instanceof Error ? error.message : '请稍后重试')}</p><button class="secondary" data-action="retry-chapter">重新加载</button></div>`;
+  }
+}
 function applyPrefs() { const root = document.documentElement; root.style.setProperty('--reader-size', `${prefs.size}px`); root.style.setProperty('--reader-leading', `${prefs.leading}`); root.style.setProperty('--reader-width', `${prefs.width}px`); }
 function isEditableTarget(target: EventTarget | null) {
   const element = target instanceof HTMLElement ? target : null;
@@ -112,6 +136,7 @@ function setupEvents() {
     if (action === 'start') { const selected = document.querySelector<HTMLElement>('.work-option.selected')?.dataset.work; workId = selected || session!.works[0].id; chapterIndex = session!.locations?.[workId]?.chapter ?? 0; await api(`/api/sessions/${session!.id}/select`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workId, chapter: chapterIndex }) }); readerView(); }
     if (action === 'works') { saveProgress(); tocOpen = false; inspectView(); }
     if (action === 'toc') { saveProgress(); tocOpen = !tocOpen; readerView(); }
+    if (action === 'retry-chapter') void loadChapter();
     if (action === 'settings') document.querySelector('#settings')?.classList.toggle('visible');
     if (action === 'upload-font') document.querySelector<HTMLInputElement>('#font-input')?.click();
     if (action === 'delete-font') {
