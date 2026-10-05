@@ -250,6 +250,8 @@ export async function importEpub(file: string, destination: string, sourceName: 
   const toc = flattenToc(tocRoots);
   const workId = slug(sourceName.replace(/\.[^.]+$/, ''), 'epub-book');
   const chapters: Chapter[] = [];
+  // Keep spine positions even when empty or missing documents are skipped.
+  const chapterSpineIndexes: number[] = [];
   const imageManifest = Object.values(manifest).filter((item) => /^image\//i.test(item['@_media-type'] ?? '') && imageType(item['@_href'] ?? ''));
   for (const item of imageManifest) {
     const sourcePath = path.posix.normalize(path.posix.join(base, decodeURIComponent(item['@_href'])));
@@ -269,6 +271,7 @@ export async function importEpub(file: string, destination: string, sourceName: 
     const id = `${String(index + 1).padStart(3, '0')}-${slug(chapterTitle)}`;
     const file = `works/${workId}/chapters/${id}.md`;
     const target = inside(destination, file); await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, markdown, 'utf8');
+    chapterSpineIndexes.push(index);
     chapters.push({ id, title: chapterTitle, level: tocItem?.level ?? 1, file, order: chapters.length, wordCount: countWords(markdown), sourcePath, resourceBase: path.posix.dirname(sourcePath), sourceTitle: sourceTitle || undefined });
   }
   if (!chapters.length) throw new Error('EPUB has no readable text chapters');
@@ -277,9 +280,10 @@ export async function importEpub(file: string, destination: string, sourceName: 
     const spineIndexes = indexes.map((index) => toc[index]).map((candidate) => spine.findIndex((idref) => path.posix.normalize(path.posix.join(base, manifest[idref]?.['@_href']?.split('#')[0] ?? '')) === path.posix.normalize(candidate.href.split('#')[0]))).filter((index) => index >= 0);
     return { node, start: spineIndexes.length ? Math.min(...spineIndexes) : -1, end: spineIndexes.length ? Math.max(...spineIndexes) : -1 };
   }).filter((group) => group.start >= 0 && group.end >= group.start);
+  const chaptersInGroup = (group: { start: number; end: number }) => chapters.filter((_, index) => chapterSpineIndexes[index] >= group.start && chapterSpineIndexes[index] <= group.end);
   if (groups.length >= 2) {
-    const valid = groups.sort((a, b) => a.start - b.start).filter((group, index, list) => index === 0 || group.start > list[index - 1].end).filter((group) => chapters.slice(group.start, group.end + 1).length > 0);
-    if (valid.length >= 2) return valid.map((group, index) => ({ id: `${workId}-${index + 1}`, title: group.node.title || `Part ${index + 1}`, chapters: chapters.slice(group.start, group.end + 1).map((chapter, order) => ({ ...chapter, order })), source: 'epub' }));
+    const valid = groups.sort((a, b) => a.start - b.start).filter((group, index, list) => index === 0 || group.start > list[index - 1].end).filter((group) => chaptersInGroup(group).length > 0);
+    if (valid.length >= 2) return valid.map((group, index) => ({ id: `${workId}-${index + 1}`, title: group.node.title || `Part ${index + 1}`, chapters: chaptersInGroup(group).map((chapter, order) => ({ ...chapter, order })), source: 'epub' }));
   }
   return [{ id: workId, title, chapters, source: 'epub' }];
 }

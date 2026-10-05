@@ -146,3 +146,30 @@ test('splits EPUB collection into top-level navigation works', async () => {
   assert.deepEqual(works.map((work) => work.title), ['Part One', 'Part Two']);
   assert.deepEqual(works.map((work) => work.chapters.length), [2, 2]);
 });
+
+for (const navigation of ['nav', 'ncx']) {
+  test(`keeps collection boundaries after empty or missing spine entries (${navigation})`, async () => {
+    const root = await tempDir(); const file = path.join(root, 'collection.epub'); const output = await tempDir();
+    const zip = new AdmZip();
+    const entries = ['blank', 'missing', 'a-cover', 'a-first', 'a-continuation', 'a-last', 'b-cover', 'b-first', 'b-last'];
+    zip.addFile('META-INF/container.xml', Buffer.from('<container><rootfiles><rootfile full-path="OEBPS/package.opf"/></rootfiles></container>'));
+    zip.addFile('OEBPS/package.opf', Buffer.from(`<package><metadata><title>Collection</title></metadata><manifest><item id="toc" href="toc.${navigation === 'nav' ? 'xhtml' : 'ncx'}" ${navigation === 'nav' ? 'properties="nav"' : ''}/>${entries.map(id => `<item id="${id}" href="${id}.xhtml"/>`).join('')}</manifest><spine toc="toc">${entries.map(id => `<itemref idref="${id}"/>`).join('')}</spine></package>`));
+    const groups = ['a', 'b'];
+    zip.addFile('OEBPS/toc.xhtml', Buffer.from(`<nav><ol>${groups.map(id => `<li><a href="${id}-cover.xhtml">Book ${id}</a><ol><li><a href="${id}-first.xhtml#start">First ${id}</a></li><li><a href="${id}-last.xhtml">Last ${id}</a></li></ol></li>`).join('')}</ol></nav>`));
+    zip.addFile('OEBPS/toc.ncx', Buffer.from(`<ncx><navMap>${groups.map(id => `<navPoint><navLabel><text>Book ${id}</text></navLabel><content src="${id}-cover.xhtml"/><navPoint><navLabel><text>First ${id}</text></navLabel><content src="${id}-first.xhtml#start"/></navPoint><navPoint><navLabel><text>Last ${id}</text></navLabel><content src="${id}-last.xhtml"/></navPoint></navPoint>`).join('')}</navMap></ncx>`));
+    for (const id of entries.filter(id => id !== 'missing')) {
+      zip.addFile(`OEBPS/${id}.xhtml`, Buffer.from(`<html><body>${id === 'blank' || id.endsWith('cover') ? '<div></div>' : `<h1>${id}</h1><p>Content ${id}</p>`}</body></html>`));
+    }
+    zip.writeZip(file);
+    const works = await importEpub(file, output, 'collection.epub');
+    assert.deepEqual(works.map(work => work.title), ['Book a', 'Book b']);
+    assert.deepEqual(works.map(work => work.chapters.map(chapter => chapter.sourcePath)), [
+      ['a-first', 'a-continuation', 'a-last'].map(id => `OEBPS/${id}.xhtml`),
+      ['b-first', 'b-last'].map(id => `OEBPS/${id}.xhtml`)
+    ]);
+    for (const work of works) {
+      assert.deepEqual(work.chapters.map(chapter => chapter.order), work.chapters.map((_, index) => index));
+      assert.match(await fs.readFile(path.join(output, work.chapters[0].file), 'utf8'), /Content .*first/);
+    }
+  });
+}
