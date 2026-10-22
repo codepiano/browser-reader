@@ -1,0 +1,51 @@
+{
+  "legacy": {
+    "start": [
+      "./scripts/start.sh"
+    ],
+    "stop": [
+      "./scripts/stop.sh"
+    ],
+    "status": [
+      "./scripts/status.sh"
+    ]
+  },
+  "prepare": [
+    [
+      "npm",
+      "ci"
+    ],
+    [
+      "npm",
+      "run",
+      "build"
+    ]
+  ],
+  "outputs": [
+    "node_modules",
+    "dist/server.js"
+  ],
+  "persistent": [
+    "data"
+  ],
+  "runtimeFiles": [
+    ".env",
+    ".env.local",
+    ".env.production"
+  ],
+  "exclude": [],
+  "toolchain": [
+    [
+      "node",
+      "--version"
+    ]
+  ],
+  "startupTimeoutSec": 180,
+  "patches": [
+    {
+      "file": "scripts/start.sh",
+      "before": "npm run build",
+      "after": ": # immutable release already built"
+    }
+  ]
+}
